@@ -1,109 +1,24 @@
--- Guest Scripts | guest loader | sector build v5
--- Drop-in. Auto-starts. Fire-and-forget. Parallel grabs.
+-- Guest Scripts | guest loader | sector build v6
+-- Literal port of 0.1 instant grab. Only sqrt-elimination and Enabled pre-filter added.
 
 repeat task.wait() until game:IsLoaded()
-local Players    = game:GetService("Players")
+local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local TS         = game:GetService("TweenService")
-local UIS        = game:GetService("UserInputService")
-local LP         = Players.LocalPlayer
+local TS = game:GetService("TweenService")
+local UIS = game:GetService("UserInputService")
+local LP = Players.LocalPlayer
 
 local Steal = {
 	AutoStealEnabled = true,
-	StealRadius      = 200,
-	HoldWait         = 0.0,   -- 0 = fire Triggered immediately after HoldBegan
-	TailWait         = 0.0,
-	MaxConcurrent    = 8,     -- parallel fires in flight
-	Data             = {},
-	_hasGC           = (type(getconnections) == "function"),
-	_hasFPP          = (type(fireproximityprompt) == "function"),
+	StealRadius      = 55,
+	StealDuration    = 0.1,
+	TailWait         = 0.05,
+	Data             = {}
 }
-
-local inFlight       = 0
+local isStealing     = false
 local stealStartTime = nil
 local autoConn       = nil
 local progressFill, progressPct
-
-local function promptHoldDuration(prompt)
-	local ok, v = pcall(function() return prompt.HoldDuration end)
-	if ok and type(v) == "number" then return v end
-	return 0
-end
-
-local function promptEnabled(prompt)
-	local ok, v = pcall(function() return prompt.Enabled end)
-	if ok then return v end
-	return true
-end
-
-local function getEntry(prompt)
-	local e = Steal.Data[prompt]
-	if e then return e end
-	e = {
-		hold    = {},
-		trigger = {},
-		path    = nil,
-		ready   = true,
-	}
-	if Steal._hasGC then
-		local okh, hc = pcall(getconnections, prompt.PromptButtonHoldBegan)
-		if okh and hc then
-			for _, c in ipairs(hc) do
-				if c.Function then table.insert(e.hold, c.Function) end
-			end
-		end
-		local okt, tc = pcall(getconnections, prompt.Triggered)
-		if okt and tc then
-			for _, c in ipairs(tc) do
-				if c.Function then table.insert(e.trigger, c.Function) end
-			end
-		end
-		if #e.hold > 0 or #e.trigger > 0 then e.path = "gc" end
-	end
-	if not e.path and Steal._hasFPP then e.path = "fpp" end
-	if not e.path then e.path = "input" end
-	Steal.Data[prompt] = e
-	return e
-end
-
-local function fireGC(e)
-	for _, fn in ipairs(e.hold) do task.spawn(fn) end
-	if Steal.HoldWait > 0 then task.wait(Steal.HoldWait) end
-	for _, fn in ipairs(e.trigger) do task.spawn(fn) end
-	if Steal.TailWait > 0 then task.wait(Steal.TailWait) end
-end
-
-local function fireFPP(e, prompt)
-	pcall(fireproximityprompt, prompt)
-	if Steal.TailWait > 0 then task.wait(Steal.TailWait) end
-end
-
-local function fireInput(e, prompt)
-	local okB = pcall(function() prompt:InputHoldBegin() end)
-	if Steal.HoldWait > 0 then task.wait(Steal.HoldWait) end
-	if okB then pcall(function() prompt:InputHoldEnd() end) end
-	if Steal.TailWait > 0 then task.wait(Steal.TailWait) end
-end
-
-local FIRE = { gc = fireGC, fpp = fireFPP, input = fireInput }
-
-local function firePrompt(prompt, e)
-	local path = e.path
-	if path == "gc" and #e.hold == 0 and #e.trigger == 0 then
-		path = Steal._hasFPP and "fpp" or "input"
-		e.path = path
-	end
-	local fn = FIRE[path]
-	if not fn then return end
-	local ok = pcall(fn, e, prompt)
-	if not ok then
-		if path == "gc" and Steal._hasFPP then
-			e.path = "fpp"; pcall(fireFPP, e, prompt)
-		elseif path ~= "input" then
-			e.path = "input"; pcall(fireInput, e, prompt)
-		end
-	end
-end
 
 local function isMyPlotByName(plotName)
 	local plots = workspace:FindFirstChild("Plots"); if not plots then return false end
@@ -116,36 +31,12 @@ local function isMyPlotByName(plotName)
 	return false
 end
 
-local function getRoot()
+local function findNearestPrompt()
 	local char = LP.Character; if not char then return nil end
-	return char:FindFirstChild("HumanoidRootPart")
+	local root = char:FindFirstChild("HumanoidRootPart")
 		or char:FindFirstChild("UpperTorso")
 		or char:FindFirstChild("Torso")
-end
-
-local function findPromptOnSpawn(sp)
-	local att = sp:FindFirstChild("PromptAttachment")
-	if att then
-		for _, pr in ipairs(att:GetChildren()) do
-			if pr:IsA("ProximityPrompt")
-				and pr.ActionText and pr.ActionText:find("Steal")
-				and promptEnabled(pr) then
-				return pr
-			end
-		end
-	end
-	for _, pr in ipairs(sp:GetDescendants()) do
-		if pr:IsA("ProximityPrompt")
-			and pr.ActionText and pr.ActionText:find("Steal")
-			and promptEnabled(pr) then
-			return pr
-		end
-	end
-	return nil
-end
-
-local function findNearestPrompt()
-	local root = getRoot(); if not root then return nil end
+	if not root then return nil end
 	local plots = workspace:FindFirstChild("Plots"); if not plots then return nil end
 	local nearest, bestD2 = nil, math.huge
 	local r2 = Steal.StealRadius * Steal.StealRadius
@@ -163,10 +54,29 @@ local function findNearestPrompt()
 						local dz = sp.Position.Z - rz
 						local d2 = dx*dx + dy*dy + dz*dz
 						if d2 <= r2 and d2 < bestD2 then
-							local pr = findPromptOnSpawn(sp)
-							if pr and getEntry(pr) then
-								nearest, bestD2 = pr, d2
+							local found = nil
+							local att = sp:FindFirstChild("PromptAttachment")
+							if att then
+								for _, pr in ipairs(att:GetChildren()) do
+									if pr:IsA("ProximityPrompt")
+										and pr.ActionText
+										and pr.ActionText:find("Steal")
+										and pr.Enabled then
+										found = pr
+									end
+								end
 							end
+							if not found then
+								for _, pr in ipairs(sp:GetDescendants()) do
+									if pr:IsA("ProximityPrompt")
+										and pr.ActionText
+										and pr.ActionText:find("Steal")
+										and pr.Enabled then
+										found = pr
+									end
+								end
+							end
+							if found then nearest, bestD2 = found, d2 end
 						end
 					end
 				end
@@ -177,37 +87,47 @@ local function findNearestPrompt()
 end
 
 local function executeSteal(prompt)
-	if inFlight >= Steal.MaxConcurrent then return end
-	local e = getEntry(prompt)
-	if not e.ready then return end
-	e.ready = false
-	inFlight = inFlight + 1
-	if inFlight == 1 then stealStartTime = tick() end
+	if isStealing then return end
+	if not Steal.Data[prompt] then
+		Steal.Data[prompt] = { hold = {}, trigger = {}, ready = true }
+		if getconnections then
+			for _, c in ipairs(getconnections(prompt.PromptButtonHoldBegan)) do
+				if c.Function then table.insert(Steal.Data[prompt].hold, c.Function) end
+			end
+			for _, c in ipairs(getconnections(prompt.Triggered)) do
+				if c.Function then table.insert(Steal.Data[prompt].trigger, c.Function) end
+			end
+		end
+	end
+	local data = Steal.Data[prompt]; if not data.ready then return end
+	data.ready = false
+	isStealing = true
+	stealStartTime = tick()
 	task.spawn(function()
-		firePrompt(prompt, e)
-		e.ready = true
-		inFlight = inFlight - 1
-		if inFlight == 0 then stealStartTime = nil end
+		for _, fn in ipairs(data.hold) do task.spawn(fn) end
+		local el = 0
+		while el < Steal.StealDuration do el = el + task.wait() end
+		for _, fn in ipairs(data.trigger) do task.spawn(fn) end
+		task.wait(Steal.TailWait)
+		data.ready = true
+		isStealing = false
 	end)
 end
 
 local function startAutoSteal()
 	if autoConn then return end
 	autoConn = RunService.Heartbeat:Connect(function()
-		if not Steal.AutoStealEnabled then return end
-		if inFlight >= Steal.MaxConcurrent then return end
+		if not Steal.AutoStealEnabled or isStealing then return end
 		local p = findNearestPrompt()
 		if p then executeSteal(p) end
 	end)
 end
 
-_G.GuestScripts = Steal
-_G.AutoSteal    = Steal
+_G.AutoSteal = Steal
 
--- HUD identical to v4 (unchanged)
 do
-	local old = LP.PlayerGui:FindFirstChild("GuestScripts_HUD")
-	if old then old:Destroy() end
+	local _old = LP.PlayerGui:FindFirstChild("GuestScripts_HUD")
+	if _old then _old:Destroy() end
 	local gui = Instance.new("ScreenGui")
 	gui.Name = "GuestScripts_HUD"; gui.ResetOnSpawn = false
 	gui.DisplayOrder = 200; gui.IgnoreGuiInset = true
@@ -215,7 +135,6 @@ do
 	gui.Parent = LP.PlayerGui
 
 	local frame = Instance.new("Frame", gui)
-	frame.Name = "StealProgressGui"
 	frame.Size = UDim2.new(0, 320, 0, 24)
 	frame.Position = UDim2.new(0.5, 0, 1, -90)
 	frame.AnchorPoint = Vector2.new(0.5, 1)
@@ -225,7 +144,6 @@ do
 	Instance.new("UICorner", frame).CornerRadius = UDim.new(1, 0)
 
 	local shadow = Instance.new("Frame", gui)
-	shadow.Name = "PillShadow"
 	shadow.Size = UDim2.new(0, 330, 0, 30)
 	shadow.Position = UDim2.new(0.5, 0, 1, -87)
 	shadow.AnchorPoint = Vector2.new(0.5, 1)
@@ -293,17 +211,17 @@ do
 
 	progressFill = fill; progressPct = pct
 
-	local FILL_DURATION = 0.02
+	local FILL_DURATION = 0.1
 	local lastPct = 0
 	RunService.RenderStepped:Connect(function()
 		if not frame.Visible then return end
 		local target = 0
-		if inFlight > 0 and stealStartTime then
+		if isStealing and stealStartTime then
 			target = math.clamp((tick() - stealStartTime) / FILL_DURATION, 0, 1)
 		elseif Steal.AutoStealEnabled then
 			target = (findNearestPrompt() and 1 or 0)
 		end
-		lastPct = lastPct + (target - lastPct) * 0.35
+		lastPct = lastPct + (target - lastPct) * 0.2
 		local f = math.clamp(lastPct, 0, 1)
 		fill.Size = UDim2.new(f, -6 * f, 1, -6)
 		if lastPct >= 0.87 then
@@ -331,7 +249,6 @@ do
 	end
 end
 
--- anti-die
 do
 	local conns = {}
 	local function enable()
@@ -351,11 +268,5 @@ do
 	reset()
 	LP.CharacterAdded:Connect(function() task.wait(); reset() end)
 end
-
-LP.CharacterAdded:Connect(function()
-	table.clear(Steal.Data)
-	inFlight = 0
-	stealStartTime = nil
-end)
 
 pcall(startAutoSteal)

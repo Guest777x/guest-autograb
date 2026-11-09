@@ -1,5 +1,5 @@
--- Guest Scripts | guest loader | sector build v6
--- Literal port of 0.1 instant grab. Only sqrt-elimination and Enabled pre-filter added.
+-- Guest Scripts | guest loader | sector build v7
+-- 0.1 port + cached plot list + cached spawn per prompt + tail overlap.
 
 repeat task.wait() until game:IsLoaded()
 local Players = game:GetService("Players")
@@ -13,22 +13,75 @@ local Steal = {
 	StealRadius      = 55,
 	StealDuration    = 0.1,
 	TailWait         = 0.05,
-	Data             = {}
+	Data             = {},   -- prompt -> { hold, trigger, ready, spawn }
 }
 local isStealing     = false
 local stealStartTime = nil
 local autoConn       = nil
 local progressFill, progressPct
 
-local function isMyPlotByName(plotName)
-	local plots = workspace:FindFirstChild("Plots"); if not plots then return false end
-	local plot  = plots:FindFirstChild(plotName);       if not plot  then return false end
-	local sign  = plot:FindFirstChild("PlotSign")
+-- ---------- plot list cache ----------
+local _plotCache = nil
+local _plotCacheSig = nil
+
+local function isMyPlotByName(plot)
+	local sign = plot:FindFirstChild("PlotSign")
 	if sign then
 		local yb = sign:FindFirstChild("YourBase")
 		if yb and yb:IsA("BillboardGui") then return yb.Enabled == true end
 	end
 	return false
+end
+
+local function rebuildPlotCache()
+	local plots = workspace:FindFirstChild("Plots")
+	if not plots then _plotCache = {}; _plotCacheSig = nil; return end
+	local list = {}
+	for _, plot in ipairs(plots:GetChildren()) do
+		if plot:IsA("Model") and not isMyPlotByName(plot) then
+			local pods = plot:FindFirstChild("AnimalPodiums")
+			if pods then
+				for _, pod in ipairs(pods:GetChildren()) do
+					local base = pod:FindFirstChild("Base")
+					local sp = base and base:FindFirstChild("Spawn")
+					if sp then table.insert(list, sp) end
+				end
+			end
+		end
+	end
+	_plotCache = list
+	_plotCacheSig = plots
+end
+
+local function ensurePlotCache()
+	local plots = workspace:FindFirstChild("Plots")
+	if not plots then _plotCache = nil; return nil end
+	if not _plotCache or _plotCacheSig ~= plots or #_plotCache == 0 then
+		rebuildPlotCache()
+	end
+	return _plotCache
+end
+
+-- ---------- prompt resolution ----------
+local function resolvePrompt(sp)
+	local att = sp:FindFirstChild("PromptAttachment")
+	if att then
+		for _, pr in ipairs(att:GetChildren()) do
+			if pr:IsA("ProximityPrompt")
+				and pr.ActionText and pr.ActionText:find("Steal")
+				and pr.Enabled then
+				return pr
+			end
+		end
+	end
+	for _, pr in ipairs(sp:GetDescendants()) do
+		if pr:IsA("ProximityPrompt")
+			and pr.ActionText and pr.ActionText:find("Steal")
+			and pr.Enabled then
+			return pr
+		end
+	end
+	return nil
 end
 
 local function findNearestPrompt()
@@ -37,69 +90,39 @@ local function findNearestPrompt()
 		or char:FindFirstChild("UpperTorso")
 		or char:FindFirstChild("Torso")
 	if not root then return nil end
-	local plots = workspace:FindFirstChild("Plots"); if not plots then return nil end
-	local nearest, bestD2 = nil, math.huge
-	local r2 = Steal.StealRadius * Steal.StealRadius
+	local list = ensurePlotCache(); if not list then return nil end
 	local rx, ry, rz = root.Position.X, root.Position.Y, root.Position.Z
-	for _, plot in ipairs(plots:GetChildren()) do
-		if plot:IsA("Model") and not isMyPlotByName(plot.Name) then
-			local pods = plot:FindFirstChild("AnimalPodiums")
-			if pods then
-				for _, pod in ipairs(pods:GetChildren()) do
-					local base = pod:FindFirstChild("Base")
-					local sp = base and base:FindFirstChild("Spawn")
-					if sp then
-						local dx = sp.Position.X - rx
-						local dy = sp.Position.Y - ry
-						local dz = sp.Position.Z - rz
-						local d2 = dx*dx + dy*dy + dz*dz
-						if d2 <= r2 and d2 < bestD2 then
-							local found = nil
-							local att = sp:FindFirstChild("PromptAttachment")
-							if att then
-								for _, pr in ipairs(att:GetChildren()) do
-									if pr:IsA("ProximityPrompt")
-										and pr.ActionText
-										and pr.ActionText:find("Steal")
-										and pr.Enabled then
-										found = pr
-									end
-								end
-							end
-							if not found then
-								for _, pr in ipairs(sp:GetDescendants()) do
-									if pr:IsA("ProximityPrompt")
-										and pr.ActionText
-										and pr.ActionText:find("Steal")
-										and pr.Enabled then
-										found = pr
-									end
-								end
-							end
-							if found then nearest, bestD2 = found, d2 end
-						end
-					end
-				end
-			end
+	local r2 = Steal.StealRadius * Steal.StealRadius
+	local nearest, bestD2 = nil, math.huge
+	for _, sp in ipairs(list) do
+		local p = sp.Position
+		local dx, dy, dz = p.X - rx, p.Y - ry, p.Z - rz
+		local d2 = dx*dx + dy*dy + dz*dz
+		if d2 <= r2 and d2 < bestD2 then
+			local pr = resolvePrompt(sp)
+			if pr then nearest, bestD2 = pr, d2 end
 		end
 	end
-	return nearest
+	return nearest, bestD2
 end
 
+-- ---------- execute ----------
 local function executeSteal(prompt)
 	if isStealing then return end
-	if not Steal.Data[prompt] then
-		Steal.Data[prompt] = { hold = {}, trigger = {}, ready = true }
+	local data = Steal.Data[prompt]
+	if not data then
+		data = { hold = {}, trigger = {}, ready = true }
 		if getconnections then
 			for _, c in ipairs(getconnections(prompt.PromptButtonHoldBegan)) do
-				if c.Function then table.insert(Steal.Data[prompt].hold, c.Function) end
+				if c.Function then table.insert(data.hold, c.Function) end
 			end
 			for _, c in ipairs(getconnections(prompt.Triggered)) do
-				if c.Function then table.insert(Steal.Data[prompt].trigger, c.Function) end
+				if c.Function then table.insert(data.trigger, c.Function) end
 			end
 		end
+		Steal.Data[prompt] = data
 	end
-	local data = Steal.Data[prompt]; if not data.ready then return end
+	if not data.ready then return end
 	data.ready = false
 	isStealing = true
 	stealStartTime = tick()
@@ -108,12 +131,13 @@ local function executeSteal(prompt)
 		local el = 0
 		while el < Steal.StealDuration do el = el + task.wait() end
 		for _, fn in ipairs(data.trigger) do task.spawn(fn) end
-		task.wait(Steal.TailWait)
 		data.ready = true
 		isStealing = false
+		task.wait(Steal.TailWait)
 	end)
 end
 
+-- ---------- loop ----------
 local function startAutoSteal()
 	if autoConn then return end
 	autoConn = RunService.Heartbeat:Connect(function()
@@ -125,6 +149,7 @@ end
 
 _G.AutoSteal = Steal
 
+-- ---------- HUD ----------
 do
 	local _old = LP.PlayerGui:FindFirstChild("GuestScripts_HUD")
 	if _old then _old:Destroy() end
@@ -249,6 +274,7 @@ do
 	end
 end
 
+-- ---------- anti-die ----------
 do
 	local conns = {}
 	local function enable()
@@ -268,5 +294,18 @@ do
 	reset()
 	LP.CharacterAdded:Connect(function() task.wait(); reset() end)
 end
+
+-- ---------- cache invalidation ----------
+do
+	local plots = workspace:FindFirstChild("Plots")
+	if plots then
+		plots.ChildAdded:Connect(function() _plotCache = nil end)
+		plots.ChildRemoved:Connect(function() _plotCache = nil end)
+	end
+end
+LP.CharacterAdded:Connect(function()
+	table.clear(Steal.Data)
+	_plotCache = nil
+end)
 
 pcall(startAutoSteal)

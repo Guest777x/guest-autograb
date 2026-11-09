@@ -1,65 +1,142 @@
--- Guest Scripts | guest loader | sector build
+-- Guest Scripts | guest loader | sector build v2
 -- Drop-in. Auto-starts. No manual steps.
 
 repeat task.wait() until game:IsLoaded()
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local TS = game:GetService("TweenService")
-local UIS = game:GetService("UserInputService")
-local LP = Players.LocalPlayer
+local Players   = game:GetService("Players")
+local RunService= game:GetService("RunService")
+local TS        = game:GetService("TweenService")
+local UIS       = game:GetService("UserInputService")
+local LP        = Players.LocalPlayer
 
 local Steal = {
-	AutoStealEnabled=false, StealRadius=80, StealDuration=0.1,
-	Mode="instant",
-	HalfFireRange=10, HalfHoldMin=1.3, HalfHoldMax=2.6, HalfEntryDelay=0.3,
-	Data={}
+	AutoStealEnabled = true,
+	StealRadius      = 120,
+	HoldMin          = 0.02,
+	HoldMax          = 0.06,
+	TailMin          = 0.0,
+	TailMax          = 0.02,
+	CadenceMax       = 0.35,   -- 1-in-~3 frames attempt
+	Data             = {},
+	_firePrompt      = nil,    -- resolved at boot
 }
-local isStealing = false
+
+local isStealing     = false
 local stealStartTime = nil
-local autoConn = nil
+local autoConn       = nil
 local progressFill, progressPct
 
+-- ---------- executor capability probe ----------
+local function resolveFire()
+	if type(getconnections) == "function" then
+		return function(prompt)
+			local d = Steal.Data[prompt]
+			for _, fn in ipairs(d.hold)    do task.spawn(fn) end
+			task.wait(Steal.HoldMin + math.random() * (Steal.HoldMax - Steal.HoldMin))
+			for _, fn in ipairs(d.trigger) do task.spawn(fn) end
+			if Steal.TailMax > 0 then
+				task.wait(Steal.TailMin + math.random() * (Steal.TailMax - Steal.TailMin))
+			end
+		end
+	end
+	if type(fireproximityprompt) == "function" then
+		return function(prompt)
+			pcall(fireproximityprompt, prompt)
+			if Steal.TailMax > 0 then
+				task.wait(Steal.TailMin + math.random() * (Steal.TailMax - Steal.TailMin))
+			end
+		end
+	end
+	return function(prompt)
+		local ok = pcall(function() prompt:InputHoldBegin() end)
+		task.wait(Steal.HoldMin + math.random() * (Steal.HoldMax - Steal.HoldMin))
+		if ok then pcall(function() prompt:InputHoldEnd() end) end
+		if Steal.TailMax > 0 then
+			task.wait(Steal.TailMin + math.random() * (Steal.TailMax - Steal.TailMin))
+		end
+	end
+end
+Steal._firePrompt = resolveFire()
+
+-- ---------- helpers ----------
 local function isMyPlotByName(plotName)
-	local plots=workspace:FindFirstChild("Plots"); if not plots then return false end
-	local plot=plots:FindFirstChild(plotName); if not plot then return false end
-	local sign=plot:FindFirstChild("PlotSign")
-	if sign then local yb=sign:FindFirstChild("YourBase"); if yb and yb:IsA("BillboardGui") then return yb.Enabled==true end end
+	local plots = workspace:FindFirstChild("Plots"); if not plots then return false end
+	local plot  = plots:FindFirstChild(plotName);       if not plot  then return false end
+	local sign  = plot:FindFirstChild("PlotSign")
+	if sign then
+		local yb = sign:FindFirstChild("YourBase")
+		if yb and yb:IsA("BillboardGui") then return yb.Enabled == true end
+	end
 	return false
 end
 
 local function getRoot()
-	local char=LP.Character; if not char then return nil end
-	return char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("UpperTorso") or char:FindFirstChild("Torso")
+	local char = LP.Character; if not char then return nil end
+	return char:FindFirstChild("HumanoidRootPart")
+		or char:FindFirstChild("UpperTorso")
+		or char:FindFirstChild("Torso")
 end
 
 local function cachePrompt(prompt)
 	if Steal.Data[prompt] then return end
-	Steal.Data[prompt]={hold={},trigger={},ready=true}
-	if getconnections then
-		for _,c in ipairs(getconnections(prompt.PromptButtonHoldBegan)) do if c.Function then table.insert(Steal.Data[prompt].hold,c.Function) end end
-		for _,c in ipairs(getconnections(prompt.Triggered)) do if c.Function then table.insert(Steal.Data[prompt].trigger,c.Function) end end
+	local entry = { hold = {}, trigger = {}, ready = true, cached = false }
+	if type(getconnections) == "function" then
+		local ok1, hc = pcall(getconnections, prompt.PromptButtonHoldBegan)
+		if ok1 and hc then
+			for _, c in ipairs(hc) do
+				if c.Function then table.insert(entry.hold, c.Function) end
+			end
+		end
+		local ok2, tc = pcall(getconnections, prompt.Triggered)
+		if ok2 and tc then
+			for _, c in ipairs(tc) do
+				if c.Function then table.insert(entry.trigger, c.Function) end
+			end
+		end
+		entry.cached = (#entry.hold > 0 or #entry.trigger > 0)
 	end
+	Steal.Data[prompt] = entry
 end
 
 local function findNearestPrompt()
-	local root=getRoot(); if not root then return nil end
-	local plots=workspace:FindFirstChild("Plots"); if not plots then return nil end
-	local nearest,dist=nil,math.huge
-	for _,plot in ipairs(plots:GetChildren()) do
+	local root = getRoot(); if not root then return nil end
+	local plots = workspace:FindFirstChild("Plots"); if not plots then return nil end
+	local nearest, dist = nil, math.huge
+	local r2 = Steal.StealRadius * Steal.StealRadius
+	for _, plot in ipairs(plots:GetChildren()) do
 		if plot:IsA("Model") and not isMyPlotByName(plot.Name) then
-			local pods=plot:FindFirstChild("AnimalPodiums")
+			local pods = plot:FindFirstChild("AnimalPodiums")
 			if pods then
-				for _,pod in ipairs(pods:GetChildren()) do
-					local base=pod:FindFirstChild("Base")
-					local sp=base and base:FindFirstChild("Spawn")
+				for _, pod in ipairs(pods:GetChildren()) do
+					local base = pod:FindFirstChild("Base")
+					local sp = base and base:FindFirstChild("Spawn")
 					if sp then
-						local d=(sp.Position-root.Position).Magnitude
-						if d<=Steal.StealRadius and d<dist then
-							local found=nil
-							local att=sp:FindFirstChild("PromptAttachment")
-							if att then for _,pr in ipairs(att:GetChildren()) do if pr:IsA("ProximityPrompt") and pr.ActionText and pr.ActionText:find("Steal") then found=pr end end end
-							if not found then for _,pr in ipairs(sp:GetDescendants()) do if pr:IsA("ProximityPrompt") and pr.ActionText and pr.ActionText:find("Steal") then found=pr end end end
-							if found then cachePrompt(found); nearest,dist=found,d end
+						local d2 = (sp.Position - root.Position).Magnitude
+						d2 = d2 * d2
+						if d2 <= r2 and d2 < dist then
+							local found = nil
+							local att = sp:FindFirstChild("PromptAttachment")
+							if att then
+								for _, pr in ipairs(att:GetChildren()) do
+									if pr:IsA("ProximityPrompt")
+										and pr.ActionText
+										and pr.ActionText:find("Steal") then
+										found = pr; break
+									end
+								end
+							end
+							if not found then
+								for _, pr in ipairs(sp:GetDescendants()) do
+									if pr:IsA("ProximityPrompt")
+										and pr.ActionText
+										and pr.ActionText:find("Steal") then
+										found = pr; break
+									end
+								end
+							end
+							if found then
+								cachePrompt(found)
+								nearest, dist = found, d2
+							end
 						end
 					end
 				end
@@ -69,253 +146,260 @@ local function findNearestPrompt()
 	return nearest
 end
 
-local function _promptDist(prompt)
-	local root=getRoot(); if not root then return math.huge end
-	local part=prompt.Parent
-	if part and part:IsA("Attachment") then part=part.Parent end
-	if part and part:IsA("BasePart") then return (part.Position-root.Position).Magnitude end
-	local ok,cf=pcall(function() return prompt.Parent and prompt.Parent.WorldPosition end)
-	if ok and cf then return (cf-root.Position).Magnitude end
-	return math.huge
-end
-
 local function executeSteal(prompt)
 	if isStealing then return end
 	cachePrompt(prompt)
-	local data=Steal.Data[prompt]; if not data or not data.ready then return end
-	data.ready=false; isStealing=true; stealStartTime=tick()
+	local data = Steal.Data[prompt]
+	if not data or not data.ready then return end
+	data.ready = false
+	isStealing = true
+	stealStartTime = tick()
 	task.spawn(function()
-		for _,fn in ipairs(data.hold) do task.spawn(fn) end
-		task.wait(0.15 + math.random()*0.25)   -- 150-400ms randomized hold
-		for _,fn in ipairs(data.trigger) do task.spawn(fn) end
-		task.wait(math.random()*0.05)
-		data.ready=true; isStealing=false
+		Steal._firePrompt(prompt)
+		data.ready = true
+		isStealing = false
 	end)
 end
 
+-- ---------- auto loop ----------
 local function startAutoSteal()
 	if autoConn then return end
-	autoConn=RunService.Heartbeat:Connect(function()
+	autoConn = RunService.Heartbeat:Connect(function()
 		if not Steal.AutoStealEnabled or isStealing then return end
-		if math.random() > 0.12 then return end   -- ~7Hz irregular cadence
-		task.wait(math.random()*0.08)
-		local p=findNearestPrompt(); if p then executeSteal(p) end
+		if math.random() > Steal.CadenceMax then return end
+		local p = findNearestPrompt()
+		if p then executeSteal(p) end
 	end)
 end
 
 local function stopAutoSteal()
-	if autoConn then autoConn:Disconnect(); autoConn=nil end
-	isStealing=false
+	if autoConn then autoConn:Disconnect(); autoConn = nil end
+	isStealing = false
 end
+
 _G.GuestScripts = Steal
-_G.AutoSteal = Steal
+_G.AutoSteal    = Steal
 
+-- ---------- HUD ----------
 do
-	local _oldSPG = LP.PlayerGui:FindFirstChild("GuestScripts_HUD")
-	if _oldSPG then _oldSPG:Destroy() end
-	local spScreenGui=Instance.new("ScreenGui")
-	spScreenGui.Name="GuestScripts_HUD";spScreenGui.ResetOnSpawn=false
-	spScreenGui.DisplayOrder=200;spScreenGui.IgnoreGuiInset=true
-	spScreenGui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling
-	spScreenGui.Parent=LP.PlayerGui
+	local old = LP.PlayerGui:FindFirstChild("GuestScripts_HUD")
+	if old then old:Destroy() end
 
-	local spFrame=Instance.new("Frame",spScreenGui)
-	spFrame.Name="StealProgressGui"
-	spFrame.Size=UDim2.new(0,320,0,24)
-	spFrame.Position=UDim2.new(0.5,0,1,-90)
-	spFrame.AnchorPoint=Vector2.new(0.5,1)
-	spFrame.BackgroundTransparency=1
-	spFrame.BorderSizePixel=0;spFrame.Active=true;spFrame.Visible=true
-	spFrame.ZIndex=300;spFrame.ClipsDescendants=true
-	Instance.new("UICorner",spFrame).CornerRadius=UDim.new(1,0)
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "GuestScripts_HUD"
+	gui.ResetOnSpawn = false
+	gui.DisplayOrder = 200
+	gui.IgnoreGuiInset = true
+	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+	gui.Parent = LP.PlayerGui
 
-	local shadow=Instance.new("Frame",spScreenGui)
-	shadow.Name="PillShadow"
-	shadow.Size=UDim2.new(0,330,0,30)
-	shadow.Position=UDim2.new(0.5,0,1,-87)
-	shadow.AnchorPoint=Vector2.new(0.5,1)
-	shadow.BackgroundColor3=Color3.fromRGB(255,255,255)
-	shadow.BackgroundTransparency=0.8
-	shadow.BorderSizePixel=0
-	shadow.ZIndex=299
-	local shadowCorner=Instance.new("UICorner",shadow)
-	shadowCorner.CornerRadius=UDim.new(1,0)
-	local shadowBlur=Instance.new("BlurEffect",shadow)
-	shadowBlur.Size=8
-	shadow.ClipsDescendants=true
+	local frame = Instance.new("Frame", gui)
+	frame.Name = "StealProgressGui"
+	frame.Size = UDim2.new(0, 320, 0, 24)
+	frame.Position = UDim2.new(0.5, 0, 1, -90)
+	frame.AnchorPoint = Vector2.new(0.5, 1)
+	frame.BackgroundTransparency = 1
+	frame.BorderSizePixel = 0
+	frame.Active = true
+	frame.Visible = true
+	frame.ZIndex = 300
+	frame.ClipsDescendants = true
+	Instance.new("UICorner", frame).CornerRadius = UDim.new(1, 0)
 
-	local bgImage=Instance.new("ImageLabel",spFrame)
-	bgImage.Name="BgImage"
-	bgImage.Size=UDim2.new(1,0,1,0)
-	bgImage.Position=UDim2.new(0,0,0,0)
-	bgImage.BackgroundTransparency=1
-	bgImage.Image="rbxassetid://115292342024385"
-	bgImage.ZIndex=300
-	bgImage.ScaleType=Enum.ScaleType.Slice
-	bgImage.SliceCenter=Rect.new(4,4,4,4)
+	local shadow = Instance.new("Frame", gui)
+	shadow.Name = "PillShadow"
+	shadow.Size = UDim2.new(0, 330, 0, 30)
+	shadow.Position = UDim2.new(0.5, 0, 1, -87)
+	shadow.AnchorPoint = Vector2.new(0.5, 1)
+	shadow.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	shadow.BackgroundTransparency = 0.8
+	shadow.BorderSizePixel = 0
+	shadow.ZIndex = 299
+	Instance.new("UICorner", shadow).CornerRadius = UDim.new(1, 0)
+	local blur = Instance.new("BlurEffect", shadow); blur.Size = 8
 
-	local border=Instance.new("UIStroke",spFrame)
-	border.Color=Color3.fromRGB(255,255,255)
-	border.Thickness=2
-	border.Transparency=0.3
-	border.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
+	local bg = Instance.new("ImageLabel", frame)
+	bg.Name = "BgImage"
+	bg.Size = UDim2.new(1, 0, 1, 0)
+	bg.BackgroundTransparency = 1
+	bg.Image = "rbxassetid://115292342024385"
+	bg.ScaleType = Enum.ScaleType.Slice
+	bg.SliceCenter = Rect.new(4, 4, 4, 4)
+	bg.ZIndex = 300
 
-	local shine=Instance.new("Frame",spFrame)
-	shine.Name="Shine"
-	shine.Size=UDim2.new(0.5,0,1,0)
-	shine.Position=UDim2.new(-0.5,0,0,0)
-	shine.BackgroundColor3=Color3.fromRGB(255,255,255)
-	shine.BackgroundTransparency=0.6
-	shine.BorderSizePixel=0
-	shine.ZIndex=302
-	shine.ClipsDescendants=true
-	local shineCorner=Instance.new("UICorner",shine)
-	shineCorner.CornerRadius=UDim.new(1,0)
+	local stroke = Instance.new("UIStroke", frame)
+	stroke.Color = Color3.fromRGB(255, 255, 255)
+	stroke.Thickness = 2
+	stroke.Transparency = 0.3
+	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+
+	local shine = Instance.new("Frame", frame)
+	shine.Name = "Shine"
+	shine.Size = UDim2.new(0.5, 0, 1, 0)
+	shine.Position = UDim2.new(-0.5, 0, 0, 0)
+	shine.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	shine.BackgroundTransparency = 0.6
+	shine.BorderSizePixel = 0
+	shine.ZIndex = 302
+	Instance.new("UICorner", shine).CornerRadius = UDim.new(1, 0)
 	task.spawn(function()
-		while true do
-			shine.Position=UDim2.new(-0.5,0,0,0)
-			TS:Create(shine,TweenInfo.new(1.2,Enum.EasingStyle.Linear),{Position=UDim2.new(1.5,0,0,0)}):Play()
+		while gui.Parent do
+			shine.Position = UDim2.new(-0.5, 0, 0, 0)
+			TS:Create(shine, TweenInfo.new(1.2, Enum.EasingStyle.Linear),
+				{ Position = UDim2.new(1.5, 0, 0, 0) }):Play()
 			task.wait(1.2)
 		end
 	end)
 
-	local spFill=Instance.new("Frame",spFrame)
-	spFill.Name="ProgressFill"
-	spFill.Size=UDim2.new(0,0,1,-6)
-	spFill.Position=UDim2.new(0,3,0,3)
-	spFill.BackgroundColor3=Color3.fromRGB(200,0,0)
-	spFill.BackgroundTransparency=0
-	spFill.BorderSizePixel=0
-	spFill.ZIndex=301
-	spFill.ClipsDescendants=true
-	local fillCorner=Instance.new("UICorner",spFill)
-	fillCorner.CornerRadius=UDim.new(1,0)
-	local gradient=Instance.new("UIGradient",spFill)
-	gradient.Color=ColorSequence.new{
-		ColorSequenceKeypoint.new(0, Color3.fromRGB(120,0,0)),
-		ColorSequenceKeypoint.new(0.5, Color3.fromRGB(200,0,0)),
-		ColorSequenceKeypoint.new(1, Color3.fromRGB(255,60,60))
+	local fill = Instance.new("Frame", frame)
+	fill.Name = "ProgressFill"
+	fill.Size = UDim2.new(0, 0, 1, -6)
+	fill.Position = UDim2.new(0, 3, 0, 3)
+	fill.BackgroundColor3 = Color3.fromRGB(200, 0, 0)
+	fill.BorderSizePixel = 0
+	fill.ZIndex = 301
+	fill.ClipsDescendants = true
+	Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
+	local grad = Instance.new("UIGradient", fill)
+	grad.Color = ColorSequence.new{
+		ColorSequenceKeypoint.new(0,   Color3.fromRGB(120, 0, 0)),
+		ColorSequenceKeypoint.new(0.5, Color3.fromRGB(200, 0, 0)),
+		ColorSequenceKeypoint.new(1,   Color3.fromRGB(255, 60, 60)),
 	}
-	gradient.Rotation=90
+	grad.Rotation = 90
 
-	local spPct=Instance.new("TextLabel",spFrame)
-	spPct.Size=UDim2.new(1,-28,1,0)
-	spPct.Position=UDim2.new(0,14,0,0)
-	spPct.BackgroundTransparency=1
-	spPct.Text="GUEST // UNREADY"
-	spPct.TextColor3=Color3.fromRGB(255,255,255)
-	spPct.Font=Enum.Font.GothamBold
-	spPct.TextSize=14
-	spPct.TextStrokeTransparency=0.5
-	spPct.TextStrokeColor3=Color3.fromRGB(0,0,0)
-	spPct.TextXAlignment=Enum.TextXAlignment.Center
-	spPct.TextYAlignment=Enum.TextYAlignment.Center
-	spPct.ZIndex=304
-	local textShadow=spPct:Clone()
-	textShadow.Name="TextShadow"
-	textShadow.Parent=spFrame
-	textShadow.TextColor3=Color3.fromRGB(0,0,0)
-	textShadow.TextStrokeTransparency=1
-	textShadow.TextTransparency=0.8
-	textShadow.ZIndex=303
-	textShadow.Position=UDim2.new(0,14,0,1)
+	local pct = Instance.new("TextLabel", frame)
+	pct.Size = UDim2.new(1, -28, 1, 0)
+	pct.Position = UDim2.new(0, 14, 0, 0)
+	pct.BackgroundTransparency = 1
+	pct.Text = "GUEST // UNREADY"
+	pct.TextColor3 = Color3.fromRGB(255, 255, 255)
+	pct.Font = Enum.Font.GothamBold
+	pct.TextSize = 14
+	pct.TextStrokeTransparency = 0.5
+	pct.TextXAlignment = Enum.TextXAlignment.Center
+	pct.TextYAlignment = Enum.TextYAlignment.Center
+	pct.ZIndex = 304
+	local pctShadow = pct:Clone()
+	pctShadow.Name = "TextShadow"
+	pctShadow.Parent = frame
+	pctShadow.TextColor3 = Color3.fromRGB(0, 0, 0)
+	pctShadow.TextStrokeTransparency = 1
+	pctShadow.TextTransparency = 0.8
+	pctShadow.ZIndex = 303
+	pctShadow.Position = UDim2.new(0, 14, 0, 1)
 
-	progressFill=spFill
-	progressPct=spPct
+	progressFill = fill
+	progressPct  = pct
 
-	local spToggleBtn=Instance.new("TextButton",spFrame)
-	spToggleBtn.Name="ToggleGUIBtn"
-	spToggleBtn.Size=UDim2.new(1,0,1,0)
-	spToggleBtn.BackgroundTransparency=1
-	spToggleBtn.Text=""
-	spToggleBtn.AutoButtonColor=false
-	spToggleBtn.ZIndex=310
-	local _spWasDragged=false
-	spToggleBtn.Activated:Connect(function()
-		if _spWasDragged then return end
-		local base=spFrame.Size
-		TS:Create(spFrame,TweenInfo.new(0.08),{Size=UDim2.new(base.X.Scale,base.X.Offset*0.95,base.Y.Scale,base.Y.Offset*0.9)}):Play()
-		task.delay(0.1,function() TS:Create(spFrame,TweenInfo.new(0.16,Enum.EasingStyle.Back),{Size=base}):Play() end)
+	local btn = Instance.new("TextButton", frame)
+	btn.Name = "ToggleGUIBtn"
+	btn.Size = UDim2.new(1, 0, 1, 0)
+	btn.BackgroundTransparency = 1
+	btn.Text = ""
+	btn.AutoButtonColor = false
+	btn.ZIndex = 310
+	local wasDragged = false
+	btn.Activated:Connect(function()
+		if wasDragged then return end
+		local base = frame.Size
+		TS:Create(frame, TweenInfo.new(0.08),
+			{ Size = UDim2.new(base.X.Scale, base.X.Offset * 0.95, base.Y.Scale, base.Y.Offset * 0.9) }):Play()
+		task.delay(0.1, function()
+			TS:Create(frame, TweenInfo.new(0.16, Enum.EasingStyle.Back), { Size = base }):Play()
+		end)
 	end)
 
-	local FILL_DURATION = 0.3
-	local _lastPct=0
+	local FILL_DURATION = 0.05
+	local lastPct = 0
 	RunService.RenderStepped:Connect(function()
-		if not spFrame.Visible then return end
-		local pct=0
+		if not frame.Visible then return end
+		local target = 0
 		if isStealing and stealStartTime then
-			pct=math.clamp((tick()-stealStartTime)/FILL_DURATION,0,1)
+			target = math.clamp((tick() - stealStartTime) / FILL_DURATION, 0, 1)
 		elseif Steal.AutoStealEnabled then
-			pct=(findNearestPrompt() and 1 or 0)
+			target = (findNearestPrompt() and 1 or 0)
 		end
-		_lastPct=_lastPct+(pct-_lastPct)*0.2
-		local f=math.clamp(_lastPct,0,1)
-		spFill.Size=UDim2.new(f,-6*f,1,-6)
-		if _lastPct>=0.87 then
-			spPct.Text="GUEST // READY"
-			spPct.TextColor3=Color3.fromRGB(120,255,140)
-			textShadow.TextColor3=Color3.fromRGB(0,0,0)
+		lastPct = lastPct + (target - lastPct) * 0.25
+		local f = math.clamp(lastPct, 0, 1)
+		fill.Size = UDim2.new(f, -6 * f, 1, -6)
+		if lastPct >= 0.87 then
+			pct.Text = "GUEST // READY"
+			pct.TextColor3 = Color3.fromRGB(120, 255, 140)
 		else
-			spPct.Text="GUEST // UNREADY"
-			spPct.TextColor3=Color3.fromRGB(255,255,255)
-			textShadow.TextColor3=Color3.fromRGB(0,0,0)
+			pct.Text = "GUEST // UNREADY"
+			pct.TextColor3 = Color3.fromRGB(255, 255, 255)
 		end
 	end)
 
-	local dragging,dragStart,startPos=false,nil,nil
-	spToggleBtn.InputBegan:Connect(function(inp)
-		if inp.UserInputType==Enum.UserInputType.MouseButton1 or inp.UserInputType==Enum.UserInputType.Touch then
-			dragging=true;_spWasDragged=false;dragStart=inp.Position;startPos=spFrame.Position
-			inp.Changed:Connect(function() if inp.UserInputState==Enum.UserInputState.End then dragging=false end end)
+	local dragging, dragStart, startPos = false, nil, nil
+	btn.InputBegan:Connect(function(inp)
+		if inp.UserInputType == Enum.UserInputType.MouseButton1
+			or inp.UserInputType == Enum.UserInputType.Touch then
+			dragging = true; wasDragged = false
+			dragStart = inp.Position; startPos = frame.Position
+			inp.Changed:Connect(function()
+				if inp.UserInputState == Enum.UserInputState.End then dragging = false end
+			end)
 		end
 	end)
 	UIS.InputChanged:Connect(function(inp)
 		if not dragging then return end
-		if inp.UserInputType==Enum.UserInputType.MouseMovement or inp.UserInputType==Enum.UserInputType.Touch then
-			local dx=inp.Position.X-dragStart.X
-			local dy=inp.Position.Y-dragStart.Y
-			if math.abs(dx)>5 or math.abs(dy)>5 then _spWasDragged=true end
-			local cam=workspace.CurrentCamera
-			local vp=cam and cam.ViewportSize or Vector2.new(1000,1000)
-			local sz=spFrame.AbsoluteSize
-			local newXScalePx=startPos.X.Scale*vp.X
-			local newX=math.clamp(newXScalePx+startPos.X.Offset+dx,sz.X/2,vp.X-sz.X/2)
-			local newY=math.clamp(startPos.Y.Scale*vp.Y+startPos.Y.Offset+dy,sz.Y,vp.Y)
-			spFrame.Position=UDim2.new(startPos.X.Scale,newX-newXScalePx,startPos.Y.Scale,newY-startPos.Y.Scale*vp.Y)
-			shadow.Position=UDim2.new(spFrame.Position.X.Scale,spFrame.Position.X.Offset,spFrame.Position.Y.Scale,spFrame.Position.Y.Offset+3)
+		if inp.UserInputType == Enum.UserInputType.MouseMovement
+			or inp.UserInputType == Enum.UserInputType.Touch then
+			local dx = inp.Position.X - dragStart.X
+			local dy = inp.Position.Y - dragStart.Y
+			if math.abs(dx) > 5 or math.abs(dy) > 5 then wasDragged = true end
+			local cam = workspace.CurrentCamera
+			local vp = cam and cam.ViewportSize or Vector2.new(1000, 1000)
+			local sz = frame.AbsoluteSize
+			local xBase = startPos.X.Scale * vp.X
+			local newX = math.clamp(xBase + startPos.X.Offset + dx, sz.X / 2, vp.X - sz.X / 2)
+			local newY = math.clamp(startPos.Y.Scale * vp.Y + startPos.Y.Offset + dy, sz.Y, vp.Y)
+			frame.Position = UDim2.new(startPos.X.Scale, newX - xBase,
+				startPos.Y.Scale, newY - startPos.Y.Scale * vp.Y)
+			shadow.Position = UDim2.new(frame.Position.X.Scale, frame.Position.X.Offset,
+				frame.Position.Y.Scale, frame.Position.Y.Offset + 3)
 		end
 	end)
-	local function updateShadow()
-		shadow.Position=UDim2.new(spFrame.Position.X.Scale,spFrame.Position.X.Offset,spFrame.Position.Y.Scale,spFrame.Position.Y.Offset+3)
+	local function syncShadow()
+		shadow.Position = UDim2.new(frame.Position.X.Scale, frame.Position.X.Offset,
+			frame.Position.Y.Scale, frame.Position.Y.Offset + 3)
 	end
-	spFrame:GetPropertyChangedSignal("Position"):Connect(updateShadow)
-	updateShadow()
+	frame:GetPropertyChangedSignal("Position"):Connect(syncShadow)
+	syncShadow()
 
-	_G._GuestSetProgressBarVisible=function(v) spFrame.Visible=v; shadow.Visible=v end
+	_G._GuestSetProgressBarVisible = function(v)
+		frame.Visible = v; shadow.Visible = v
+	end
 end
 
--- Anti-die: health-delta gated (<15) to mimic regen, not godmode. Drop this block for max stealth.
+-- ---------- anti-die (delta-gated) ----------
 do
-	local connections = {}
-	local function enableAntiDie()
+	local conns = {}
+	local function enable()
 		local char = LP.Character; if not char then return end
-		local hum = char:FindFirstChildOfClass("Humanoid"); if not hum then return end
-		local healthConn = hum:GetPropertyChangedSignal("Health"):Connect(function()
+		local hum  = char:FindFirstChildOfClass("Humanoid"); if not hum then return end
+		table.insert(conns, hum:GetPropertyChangedSignal("Health"):Connect(function()
 			if hum.Health <= 0 then
-				local delta = hum.MaxHealth - hum.Health
-				if delta < 15 then hum.Health = hum.MaxHealth end
+				if hum.MaxHealth - hum.Health < 15 then
+					hum.Health = hum.MaxHealth
+				end
 			end
-		end)
-		table.insert(connections, healthConn)
+		end))
 	end
-	local function setup()
-		for _, conn in pairs(connections) do pcall(conn.Disconnect, conn) end
-		connections = {}
-		enableAntiDie()
+	local function reset()
+		for _, c in pairs(conns) do pcall(c.Disconnect, c) end
+		conns = {}
+		enable()
 	end
-	setup()
-	LP.CharacterAdded:Connect(function() task.wait(); setup() end)
+	reset()
+	LP.CharacterAdded:Connect(function() task.wait(); reset() end)
 end
 
-Steal.AutoStealEnabled=true
+-- ---------- respawn cache clear ----------
+LP.CharacterAdded:Connect(function()
+	table.clear(Steal.Data)
+end)
+
 pcall(startAutoSteal)

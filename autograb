@@ -1,5 +1,5 @@
--- Guest Scripts | midnight edition
--- Logic: 0.1 instant grab verbatim. UI: midnight theme.
+-- Guest Scripts | guest theme
+-- Logic: 0.1 instant grab verbatim. HUD: guest skin.
 
 repeat task.wait() until game:IsLoaded()
 local Players = game:GetService("Players")
@@ -121,13 +121,13 @@ end
 _G.AutoSteal = Steal
 
 -- ============================================================
--- MIDNIGHT HUD
+-- GUEST HUD
 -- ============================================================
 do
-	local _oldSPG = LP.PlayerGui:FindFirstChild("GuestScripts_HUD")
-	if _oldSPG then _oldSPG:Destroy() end
-	local _oldSPG2 = LP.PlayerGui:FindFirstChild("StealProgressScreenGui")
-	if _oldSPG2 then _oldSPG2:Destroy() end
+	local _old = LP.PlayerGui:FindFirstChild("GuestScripts_HUD")
+	if _old then _old:Destroy() end
+	local _old2 = LP.PlayerGui:FindFirstChild("StealProgressScreenGui")
+	if _old2 then _old2:Destroy() end
 
 	local gui = Instance.new("ScreenGui")
 	gui.Name = "GuestScripts_HUD"
@@ -137,40 +137,27 @@ do
 	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 	gui.Parent = LP.PlayerGui
 
-	-- Outer glow container
-	local glow = Instance.new("Frame", gui)
-	glow.Name = "PillGlow"
-	glow.Size = UDim2.new(0, 344, 0, 36)
-	glow.Position = UDim2.new(0.5, 0, 1, -84)
-	glow.AnchorPoint = Vector2.new(0.5, 1)
-	glow.BackgroundColor3 = Color3.fromRGB(90, 60, 255)
-	glow.BackgroundTransparency = 0.55
-	glow.BorderSizePixel = 0
-	glow.ZIndex = 297
-	Instance.new("UICorner", glow).CornerRadius = UDim.new(1, 0)
-	local glowBlur = Instance.new("BlurEffect", glow); glowBlur.Size = 14
-
 	-- Shadow
 	local shadow = Instance.new("Frame", gui)
 	shadow.Name = "PillShadow"
-	shadow.Size = UDim2.new(0, 332, 0, 32)
-	shadow.Position = UDim2.new(0.5, 0, 1, -88)
+	shadow.Size = UDim2.new(0, 330, 0, 30)
+	shadow.Position = UDim2.new(0.5, 0, 1, -87)
 	shadow.AnchorPoint = Vector2.new(0.5, 1)
 	shadow.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-	shadow.BackgroundTransparency = 0.35
+	shadow.BackgroundTransparency = 0.5
 	shadow.BorderSizePixel = 0
-	shadow.ZIndex = 298
+	shadow.ZIndex = 299
 	Instance.new("UICorner", shadow).CornerRadius = UDim.new(1, 0)
 	Instance.new("BlurEffect", shadow).Size = 10
 
-	-- Main pill
+	-- Pill
 	local frame = Instance.new("Frame", gui)
 	frame.Name = "StealProgressGui"
 	frame.Size = UDim2.new(0, 320, 0, 26)
 	frame.Position = UDim2.new(0.5, 0, 1, -90)
 	frame.AnchorPoint = Vector2.new(0.5, 1)
-	frame.BackgroundColor3 = Color3.fromRGB(14, 14, 22)
-	frame.BackgroundTransparency = 0.04
+	frame.BackgroundColor3 = Color3.fromRGB(24, 24, 24)
+	frame.BackgroundTransparency = 0.05
 	frame.BorderSizePixel = 0
 	frame.Active = true
 	frame.Visible = true
@@ -178,104 +165,81 @@ do
 	frame.ClipsDescendants = true
 	Instance.new("UICorner", frame).CornerRadius = UDim.new(1, 0)
 
-	-- Inner midnight gradient (deep navy -> violet)
+	-- Guest gradient (grey -> charcoal)
 	local bgGrad = Instance.new("UIGradient", frame)
 	bgGrad.Color = ColorSequence.new{
-		ColorSequenceKeypoint.new(0.0, Color3.fromRGB(8, 10, 24)),
-		ColorSequenceKeypoint.new(0.5, Color3.fromRGB(22, 16, 48)),
-		ColorSequenceKeypoint.new(1.0, Color3.fromRGB(10, 8, 32)),
+		ColorSequenceKeypoint.new(0.0, Color3.fromRGB(52, 52, 52)),
+		ColorSequenceKeypoint.new(0.5, Color3.fromRGB(28, 28, 28)),
+		ColorSequenceKeypoint.new(1.0, Color3.fromRGB(18, 18, 18)),
 	}
 	bgGrad.Rotation = 90
 
-	-- Moon-glow stroke
+	-- Stroke
 	local stroke = Instance.new("UIStroke", frame)
-	stroke.Color = Color3.fromRGB(130, 110, 255)
-	stroke.Thickness = 1.6
-	stroke.Transparency = 0.25
+	stroke.Color = Color3.fromRGB(120, 120, 120)
+	stroke.Thickness = 1.5
+	stroke.Transparency = 0.3
 	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 
-	-- Top rim highlight
+	-- Top rim highlight (guest plate)
 	local rim = Instance.new("Frame", frame)
-	rim.Name = "Rim"
 	rim.Size = UDim2.new(1, -12, 0, 1)
 	rim.Position = UDim2.new(0, 6, 0, 1)
-	rim.BackgroundColor3 = Color3.fromRGB(170, 160, 255)
-	rim.BackgroundTransparency = 0.55
+	rim.BackgroundColor3 = Color3.fromRGB(200, 200, 200)
+	rim.BackgroundTransparency = 0.6
 	rim.BorderSizePixel = 0
 	rim.ZIndex = 301
 	Instance.new("UICorner", rim).CornerRadius = UDim.new(1, 0)
 
-	-- Starfield speckle
-	local speckle = Instance.new("Frame", frame)
-	speckle.Name = "Speckle"
-	speckle.Size = UDim2.new(1, 0, 1, 0)
-	speckle.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-	speckle.BackgroundTransparency = 0.94
-	speckle.BorderSizePixel = 0
-	speckle.ZIndex = 301
-	Instance.new("UICorner", speckle).CornerRadius = UDim.new(1, 0)
-
-	-- Shine sweep (silver-blue)
+	-- Shine sweep
 	local shine = Instance.new("Frame", frame)
 	shine.Name = "Shine"
 	shine.Size = UDim2.new(0.35, 0, 1.2, 0)
 	shine.Position = UDim2.new(-0.4, 0, -0.1, 0)
-	shine.BackgroundColor3 = Color3.fromRGB(190, 200, 255)
-	shine.BackgroundTransparency = 0.72
+	shine.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+	shine.BackgroundTransparency = 0.75
 	shine.BorderSizePixel = 0
 	shine.ZIndex = 302
 	shine.Rotation = 14
-	local shineCorner = Instance.new("UICorner", shine)
-	shineCorner.CornerRadius = UDim.new(1, 0)
+	Instance.new("UICorner", shine).CornerRadius = UDim.new(1, 0)
 	task.spawn(function()
 		while gui.Parent do
 			shine.Position = UDim2.new(-0.4, 0, -0.1, 0)
-			TS:Create(shine, TweenInfo.new(2.4, Enum.EasingStyle.Sine),
+			TS:Create(shine, TweenInfo.new(2.2, Enum.EasingStyle.Sine),
 				{ Position = UDim2.new(1.4, 0, -0.1, 0) }):Play()
-			task.wait(2.8)
+			task.wait(2.6)
 		end
 	end)
 
-	-- Progress fill (indigo -> cyan gradient)
+	-- Progress fill (guest grey -> white)
 	local fill = Instance.new("Frame", frame)
 	fill.Name = "ProgressFill"
 	fill.Size = UDim2.new(0, 0, 1, -6)
 	fill.Position = UDim2.new(0, 3, 0, 3)
-	fill.BackgroundColor3 = Color3.fromRGB(90, 90, 220)
+	fill.BackgroundColor3 = Color3.fromRGB(140, 140, 140)
 	fill.BorderSizePixel = 0
 	fill.ZIndex = 302
 	fill.ClipsDescendants = true
 	Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
 	local fillGrad = Instance.new("UIGradient", fill)
 	fillGrad.Color = ColorSequence.new{
-		ColorSequenceKeypoint.new(0.0, Color3.fromRGB(60, 40, 180)),
-		ColorSequenceKeypoint.new(0.5, Color3.fromRGB(100, 90, 240)),
-		ColorSequenceKeypoint.new(1.0, Color3.fromRGB(120, 200, 255)),
+		ColorSequenceKeypoint.new(0.0, Color3.fromRGB(110, 110, 110)),
+		ColorSequenceKeypoint.new(0.5, Color3.fromRGB(180, 180, 180)),
+		ColorSequenceKeypoint.new(1.0, Color3.fromRGB(240, 240, 240)),
 	}
 	fillGrad.Rotation = 0
 
-	-- Fill inner sheen
-	local fillSheen = Instance.new("Frame", fill)
-	fillSheen.Size = UDim2.new(1, 0, 0.5, 0)
-	fillSheen.Position = UDim2.new(0, 0, 0, 0)
-	fillSheen.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-	fillSheen.BackgroundTransparency = 0.82
-	fillSheen.BorderSizePixel = 0
-	fillSheen.ZIndex = 303
-	Instance.new("UICorner", fillSheen).CornerRadius = UDim.new(1, 0)
-
 	-- Label
 	local pct = Instance.new("TextLabel", frame)
-	pct.Name = "Pct"
 	pct.Size = UDim2.new(1, -28, 1, 0)
 	pct.Position = UDim2.new(0, 14, 0, 0)
 	pct.BackgroundTransparency = 1
-	pct.Text = "MIDNIGHT // UNREADY"
-	pct.TextColor3 = Color3.fromRGB(200, 210, 255)
+	pct.Text = "GUEST // UNREADY"
+	pct.TextColor3 = Color3.fromRGB(220, 220, 220)
 	pct.Font = Enum.Font.GothamBold
 	pct.TextSize = 14
 	pct.TextStrokeTransparency = 0.6
-	pct.TextStrokeColor3 = Color3.fromRGB(8, 8, 20)
+	pct.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
 	pct.TextXAlignment = Enum.TextXAlignment.Center
 	pct.TextYAlignment = Enum.TextYAlignment.Center
 	pct.ZIndex = 305
@@ -292,28 +256,26 @@ do
 	progressFill = fill
 	progressPct = pct
 
-	-- Toggle / click feedback
-	local toggleBtn = Instance.new("TextButton", frame)
-	toggleBtn.Size = UDim2.new(1, 0, 1, 0)
-	toggleBtn.BackgroundTransparency = 1
-	toggleBtn.Text = ""
-	toggleBtn.AutoButtonColor = false
-	toggleBtn.ZIndex = 310
+	-- Click / drag
+	local btn = Instance.new("TextButton", frame)
+	btn.Size = UDim2.new(1, 0, 1, 0)
+	btn.BackgroundTransparency = 1
+	btn.Text = ""
+	btn.AutoButtonColor = false
+	btn.ZIndex = 310
 	local _wasDragged = false
-	toggleBtn.Activated:Connect(function()
+	btn.Activated:Connect(function()
 		if _wasDragged then return end
 		local base = frame.Size
 		TS:Create(frame, TweenInfo.new(0.08),
 			{ Size = UDim2.new(base.X.Scale, base.X.Offset * 0.94, base.Y.Scale, base.Y.Offset * 0.86) }):Play()
 		task.delay(0.1, function()
-			TS:Create(frame, TweenInfo.new(0.18, Enum.EasingStyle.Back),
-				{ Size = base }):Play()
+			TS:Create(frame, TweenInfo.new(0.18, Enum.EasingStyle.Back), { Size = base }):Play()
 		end)
 	end)
 
-	-- Drag
 	local dragging, dragStart, startPos = false, nil, nil
-	toggleBtn.InputBegan:Connect(function(inp)
+	btn.InputBegan:Connect(function(inp)
 		if inp.UserInputType == Enum.UserInputType.MouseButton1
 			or inp.UserInputType == Enum.UserInputType.Touch then
 			dragging = true; _wasDragged = false
@@ -323,11 +285,9 @@ do
 			end)
 		end
 	end)
-	local function syncAll()
-		shadow.Position  = UDim2.new(frame.Position.X.Scale, frame.Position.X.Offset,
-			frame.Position.Y.Scale, frame.Position.Y.Offset + 2)
-		glow.Position    = UDim2.new(frame.Position.X.Scale, frame.Position.X.Offset,
-			frame.Position.Y.Scale, frame.Position.Y.Offset + 6)
+	local function syncShadow()
+		shadow.Position = UDim2.new(frame.Position.X.Scale, frame.Position.X.Offset,
+			frame.Position.Y.Scale, frame.Position.Y.Offset + 3)
 	end
 	UIS.InputChanged:Connect(function(inp)
 		if not dragging then return end
@@ -344,17 +304,15 @@ do
 			local newY = math.clamp(startPos.Y.Scale * vp.Y + startPos.Y.Offset + dy, sz.Y, vp.Y)
 			frame.Position = UDim2.new(startPos.X.Scale, newX - xBase,
 				startPos.Y.Scale, newY - startPos.Y.Scale * vp.Y)
-			syncAll()
+			syncShadow()
 		end
 	end)
-	frame:GetPropertyChangedSignal("Position"):Connect(syncAll)
-	syncAll()
+	frame:GetPropertyChangedSignal("Position"):Connect(syncShadow)
+	syncShadow()
 
-	-- HUD loop
 	local FILL_DURATION = 0.1
 	local _lastPct = 0
-	local _readyGlow = 0
-	RunService.RenderStepped:Connect(function(dt)
+	RunService.RenderStepped:Connect(function()
 		if not frame.Visible then return end
 		local target = 0
 		if isStealing and stealStartTime then
@@ -365,31 +323,21 @@ do
 		_lastPct = _lastPct + (target - _lastPct) * 0.22
 		local f = math.clamp(_lastPct, 0, 1)
 		fill.Size = UDim2.new(f, -6 * f, 1, -6)
-
-		local ready = _lastPct >= 0.87
-		if ready then
-			pct.Text = "MIDNIGHT // READY"
-			pct.TextColor3 = Color3.fromRGB(150, 255, 200)
-			_readyGlow = math.min(_readyGlow + dt * 3, 1)
-			stroke.Color = Color3.fromRGB(140, 255, 200)
-			stroke.Transparency = 0.05 + 0.15 * math.sin(tick() * 4)
+		if _lastPct >= 0.87 then
+			pct.Text = "GUEST // READY"
+			pct.TextColor3 = Color3.fromRGB(255, 255, 255)
+			stroke.Color = Color3.fromRGB(220, 220, 220)
+			stroke.Transparency = 0.15
 		else
-			pct.Text = "MIDNIGHT // UNREADY"
-			pct.TextColor3 = Color3.fromRGB(200, 210, 255)
-			_readyGlow = math.max(_readyGlow - dt * 3, 0)
-			stroke.Color = Color3.fromRGB(130, 110, 255)
-			stroke.Transparency = 0.25
+			pct.Text = "GUEST // UNREADY"
+			pct.TextColor3 = Color3.fromRGB(220, 220, 220)
+			stroke.Color = Color3.fromRGB(120, 120, 120)
+			stroke.Transparency = 0.3
 		end
-
-		-- glow alpha follows readiness
-		glow.BackgroundTransparency = 0.72 - 0.35 * _readyGlow
-		glow.BackgroundColor3 = ready
-			and Color3.fromRGB(90, 255, 190)
-			or Color3.fromRGB(90, 60, 255)
 	end)
 
 	_G._GuestSetProgressBarVisible = function(v)
-		frame.Visible = v; shadow.Visible = v; glow.Visible = v
+		frame.Visible = v; shadow.Visible = v
 	end
 end
 
@@ -411,7 +359,7 @@ do
 			pcall(function()
 				local newHum = Instance.new("Humanoid")
 				newHum.Name = "Humanoid"; newHum.Parent = char
-				if Workspace.CurrentCamera then Workspace.CurrentCamera.CameraSubject = newHum end
+				if Workspace.CurrentCamera then Workspace.CurrentCamera.Subject = newHum end
 				hum:Destroy()
 			end)
 		end)

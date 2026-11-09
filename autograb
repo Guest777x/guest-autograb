@@ -1,5 +1,5 @@
--- Guest Scripts | guest loader | sector build v7
--- 0.1 port + cached plot list + cached spawn per prompt + tail overlap.
+-- Guest Scripts | guest loader | sector build v8
+-- v6 verbatim + non-empty-guarded spawn cache + tail overlap. Nothing else.
 
 repeat task.wait() until game:IsLoaded()
 local Players = game:GetService("Players")
@@ -13,16 +13,16 @@ local Steal = {
 	StealRadius      = 55,
 	StealDuration    = 0.1,
 	TailWait         = 0.05,
-	Data             = {},   -- prompt -> { hold, trigger, ready, spawn }
+	Data             = {},
 }
 local isStealing     = false
 local stealStartTime = nil
 local autoConn       = nil
 local progressFill, progressPct
 
--- ---------- plot list cache ----------
-local _plotCache = nil
-local _plotCacheSig = nil
+-- ---------- spawn cache (never empty) ----------
+local _spawnCache = {}       -- list of Spawn BaseParts
+local _spawnCacheDirty = true
 
 local function isMyPlotByName(plot)
 	local sign = plot:FindFirstChild("PlotSign")
@@ -33,9 +33,9 @@ local function isMyPlotByName(plot)
 	return false
 end
 
-local function rebuildPlotCache()
+local function rebuildSpawnCache()
 	local plots = workspace:FindFirstChild("Plots")
-	if not plots then _plotCache = {}; _plotCacheSig = nil; return end
+	if not plots then return end
 	local list = {}
 	for _, plot in ipairs(plots:GetChildren()) do
 		if plot:IsA("Model") and not isMyPlotByName(plot) then
@@ -49,20 +49,21 @@ local function rebuildPlotCache()
 			end
 		end
 	end
-	_plotCache = list
-	_plotCacheSig = plots
-end
-
-local function ensurePlotCache()
-	local plots = workspace:FindFirstChild("Plots")
-	if not plots then _plotCache = nil; return nil end
-	if not _plotCache or _plotCacheSig ~= plots or #_plotCache == 0 then
-		rebuildPlotCache()
+	if #list > 0 then
+		_spawnCache = list
+		_spawnCacheDirty = false
 	end
-	return _plotCache
+	-- if #list == 0, keep old cache; retry next invalidate
 end
 
--- ---------- prompt resolution ----------
+local function getSpawnCache()
+	if _spawnCacheDirty or #_spawnCache == 0 then
+		rebuildSpawnCache()
+	end
+	return _spawnCache
+end
+
+-- ---------- prompt resolution (identical to v6) ----------
 local function resolvePrompt(sp)
 	local att = sp:FindFirstChild("PromptAttachment")
 	if att then
@@ -90,7 +91,7 @@ local function findNearestPrompt()
 		or char:FindFirstChild("UpperTorso")
 		or char:FindFirstChild("Torso")
 	if not root then return nil end
-	local list = ensurePlotCache(); if not list then return nil end
+	local list = getSpawnCache(); if #list == 0 then return nil end
 	local rx, ry, rz = root.Position.X, root.Position.Y, root.Position.Z
 	local r2 = Steal.StealRadius * Steal.StealRadius
 	local nearest, bestD2 = nil, math.huge
@@ -103,26 +104,24 @@ local function findNearestPrompt()
 			if pr then nearest, bestD2 = pr, d2 end
 		end
 	end
-	return nearest, bestD2
+	return nearest
 end
 
--- ---------- execute ----------
+-- ---------- execute (identical to v6 except tail overlap) ----------
 local function executeSteal(prompt)
 	if isStealing then return end
-	local data = Steal.Data[prompt]
-	if not data then
-		data = { hold = {}, trigger = {}, ready = true }
+	if not Steal.Data[prompt] then
+		Steal.Data[prompt] = { hold = {}, trigger = {}, ready = true }
 		if getconnections then
 			for _, c in ipairs(getconnections(prompt.PromptButtonHoldBegan)) do
-				if c.Function then table.insert(data.hold, c.Function) end
+				if c.Function then table.insert(Steal.Data[prompt].hold, c.Function) end
 			end
 			for _, c in ipairs(getconnections(prompt.Triggered)) do
-				if c.Function then table.insert(data.trigger, c.Function) end
+				if c.Function then table.insert(Steal.Data[prompt].trigger, c.Function) end
 			end
 		end
-		Steal.Data[prompt] = data
 	end
-	if not data.ready then return end
+	local data = Steal.Data[prompt]; if not data.ready then return end
 	data.ready = false
 	isStealing = true
 	stealStartTime = tick()
@@ -133,11 +132,10 @@ local function executeSteal(prompt)
 		for _, fn in ipairs(data.trigger) do task.spawn(fn) end
 		data.ready = true
 		isStealing = false
-		task.wait(Steal.TailWait)
+		task.wait(Steal.TailWait)   -- tail no longer blocks next grab
 	end)
 end
 
--- ---------- loop ----------
 local function startAutoSteal()
 	if autoConn then return end
 	autoConn = RunService.Heartbeat:Connect(function()
@@ -149,7 +147,7 @@ end
 
 _G.AutoSteal = Steal
 
--- ---------- HUD ----------
+-- ---------- HUD (identical to v6) ----------
 do
 	local _old = LP.PlayerGui:FindFirstChild("GuestScripts_HUD")
 	if _old then _old:Destroy() end
@@ -274,7 +272,7 @@ do
 	end
 end
 
--- ---------- anti-die ----------
+-- ---------- anti-die (identical to v6) ----------
 do
 	local conns = {}
 	local function enable()
@@ -295,17 +293,17 @@ do
 	LP.CharacterAdded:Connect(function() task.wait(); reset() end)
 end
 
--- ---------- cache invalidation ----------
+-- ---------- invalidate spawn cache ----------
 do
 	local plots = workspace:FindFirstChild("Plots")
 	if plots then
-		plots.ChildAdded:Connect(function() _plotCache = nil end)
-		plots.ChildRemoved:Connect(function() _plotCache = nil end)
+		plots.ChildAdded:Connect(function() _spawnCacheDirty = true end)
+		plots.ChildRemoved:Connect(function() _spawnCacheDirty = true end)
 	end
 end
 LP.CharacterAdded:Connect(function()
 	table.clear(Steal.Data)
-	_plotCache = nil
+	_spawnCacheDirty = true
 end)
 
 pcall(startAutoSteal)
